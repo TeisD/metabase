@@ -201,16 +201,59 @@
   (let [all-fields (distinct (annotate/collect-fields query :keep-date-time-fields))]
     (if-not (seq all-fields)
       pipeline-ctx
-      (let [projections (map #(vector (->lvalue %) (->initial-rvalue %)) all-fields)]
-        (-> pipeline-ctx
-            (assoc  :projections (doall (map (comp keyword first) projections)))
-            (update :query conj {$project (into (hash-map) projections)}))))))
+      ; (let [projections (map #(vector (->lvalue %) (->initial-rvalue %)) all-fields)]
+      ;   (-> pipeline-ctx
+      ;     (assoc  :projections (doall (map (comp keyword first) projections)))
+      ;     (update :query conj {$project (into (hash-map) projections)})
+      ;   )
+      ; )
+      (let [join-fields (filter #(some? (:fk-field-id %)) all-fields)]
+        (let [projections (map #(vector (->lvalue %) (->initial-rvalue %)) (filter #(nil? (:fk-field-id %)) all-fields))]
+          ; (let [projections2 (map #(vector (:field-name %) (str "$" (:table-name %) "." (:field-name %))) join-fields)]
+          (let [projections2 (map #(vector (:table-name %) (str "$" (:table-name %))) join-fields)]
+            (let [projections-join (concat projections projections2)]
+              ; (println projections-join)
+              ; (println join-fields)
+              (-> pipeline-ctx
+                (assoc  :projections (doall (map (comp keyword first) projections-join)))
+                (update :query conj {$project (into (hash-map) projections-join)})
+              )
+            )
+          )
+        )
+      )
+    )
+  )
+)
 
+
+;;; ### Lookup
+
+(defn- add-lookups [{:keys [join-tables]} pipeline-ctx]
+  (if-not (seq join-tables)
+    pipeline-ctx
+    (update pipeline-ctx :query conj 
+      (into (hash-map) 
+        (for [{:keys [table-name pk-field source-field schema join-alias]} join-tables]
+          [
+            "$lookup" (hash-map 
+              "from" table-name 
+              "localField" (:field-name source-field) 
+              "foreignField" (:field-name pk-field) 
+              "as" join-alias)
+          ]
+        )
+      )
+    )
+  )
+)
 
 ;;; ### filter
 
+
+
 (defn- parse-filter-subclause [{:keys [filter-type field value] :as filter} & [negate?]]
-  (let [field (when field (->lvalue field))
+  (let [fieldNew (when field (->lvalue field))
         value (when value (->rvalue value))
         v     (case filter-type
                 :between     {$gte (->rvalue (:min-val filter))
@@ -223,10 +266,19 @@
                 :<           {$lt  value}
                 :>           {$gt  value}
                 :<=          {$lte value}
-                :>=          {$gte value})]
-    {field (if negate?
-             {$not v}
-             v)}))
+                :>=          {$gte value})
+        ]
+        
+        (if (some? (:fk-field-id field))
+          {(str (:table-name field) "."  fieldNew) (if negate? {$not v} v)}
+          {fieldNew (if negate? {$not v} v)}
+        )
+        ; (if (some? (:fk-field-id field))
+        ;   (println {(str (:table-name field) "."  fieldNew) (if negate? {$not v} v)})
+        ;   (println {fieldNew (if negate? {$not v} v)})
+        ; )
+  )
+)
 
 (defn- parse-filter-clause [{:keys [compound-type subclause subclauses], :as clause}]
   (case compound-type
@@ -297,23 +349,41 @@
 (defn- handle-order-by [{:keys [order-by]} pipeline-ctx]
   (if-not (seq order-by)
     pipeline-ctx
-    (update pipeline-ctx :query conj {$sort (into (hash-map)
-                                                  (for [{:keys [field direction]} order-by]
-                                                    [(->lvalue field) (case direction
-                                                                        :ascending   1
-                                                                        :descending -1)]))})))
+    (update pipeline-ctx :query conj {
+      $sort (into (hash-map)
+        (for [{:keys [field direction]} order-by]
+          [
+            (->lvalue field) (case direction
+            :ascending   1
+            :descending -1)
+          ]
+        )
+      )
+    })
+  )
+)
 
 ;;; ### fields
 
 (defn- handle-fields [{:keys [fields]} pipeline-ctx]
   (if-not (seq fields)
     pipeline-ctx
-    (let [new-projections (doall (map #(vector (->lvalue %) (->rvalue %)) fields))]
-      (-> pipeline-ctx
-          (assoc :projections (map (comp keyword first) new-projections))
-          ;; add project _id = false to keep _id from getting automatically returned unless explicitly specified
-          (update :query conj {$project (merge {"_id" false}
-                                               (into (hash-map) new-projections))})))))
+    (let [join-projections (map #(vector (:field-display-name %) (str "$" (:table-name %) "." (:field-name %))) (filter #(some? (:fk-field-id %)) fields))]
+      (let [new-projections (doall (map #(vector (->lvalue %) (->rvalue %)) fields))]
+        (let [new-projections (concat new-projections join-projections)]
+          (println new-projections)
+          (-> pipeline-ctx
+            (assoc :projections (map (comp keyword first) new-projections))
+            ;; add project _id = false to keep _id from getting automatically returned unless explicitly specified
+            (update :query conj {$project 
+              (merge {"_id" false} (into (hash-map) new-projections))}
+            )
+          )
+        )
+      )
+    )
+  )
+)
 
 ;;; ### limit
 
@@ -340,7 +410,8 @@
   (reduce (fn [pipeline-ctx f]
             (f query pipeline-ctx))
           {:projections [], :query []}
-          [add-initial-projection
+          [add-lookups
+           add-initial-projection
            handle-filter
            handle-breakout+aggregation
            handle-order-by

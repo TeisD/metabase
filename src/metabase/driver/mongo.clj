@@ -147,6 +147,16 @@
        :fields (set (for [field (keys parsed-rows)]
                       (describe-table-field field (field parsed-rows))))})))
 
+(defn features
+  "Default implementation of `IDriver` `features` for SQL drivers."
+  [driver]
+  (cond-> #{:basic-aggregations 
+            :foreign-keys
+            :dynamic-schema 
+            :nested-fields}
+  )
+)
+
 
 (defrecord MongoDriver []
   clojure.lang.Named
@@ -188,7 +198,7 @@
                                                              :display-name "Additional Mongo connection string options"
                                                              :placeholder  "readPreference=nearest&replicaSet=test"}]))
           :execute-query                     (u/drop-first-arg qp/execute-query)
-          :features                          (constantly #{:basic-aggregations :dynamic-schema :nested-fields})
+          :features                           features
           :humanize-connection-error-message (u/drop-first-arg humanize-connection-error-message)
           :mbql->native                      (u/drop-first-arg qp/mbql->native)
           :process-query-in-context          (u/drop-first-arg process-query-in-context)
