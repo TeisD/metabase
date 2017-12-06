@@ -6,9 +6,12 @@
             [metabase.models
              [common :as common]
              [setting :as setting :refer [defsetting]]]
+            [metabase.public-settings.metastore :as metastore]
+            [metabase.util.i18n :refer [available-locales-with-names set-locale]]
             [metabase.util.password :as password]
             [toucan.db :as db])
-  (:import java.util.TimeZone))
+  (:import java.util.Locale
+           java.util.TimeZone))
 
 (defsetting check-for-updates
   "Identify when new versions of Metabase are available."
@@ -32,6 +35,15 @@
             (setting/set-string! :site-url (when new-value
                                              (cond->> (s/replace new-value #"/$" "")
                                                (not (s/starts-with? new-value "http")) (str "http://"))))))
+
+(defsetting site-locale
+  "The default language for this Metabase instance. This only applies to emails, Pulses, etc. Users' browsers will
+   specify the language used in the user interface."
+  :type    :string
+  :setter  (fn [new-value]
+             (setting/set-string! :site-locale new-value)
+             (set-locale new-value))
+  :default "en")
 
 (defsetting admin-email
   "The email address users should be referred to if they encounter a problem.")
@@ -107,8 +119,8 @@
   :default 10.0)
 
 (defn remove-public-uuid-if-public-sharing-is-disabled
-  "If public sharing is *disabled* and OBJECT has a `:public_uuid`, remove it so people don't try to use it (since it won't work).
-   Intended for use as part of a `post-select` implementation for Cards and Dashboards."
+  "If public sharing is *disabled* and OBJECT has a `:public_uuid`, remove it so people don't try to use it (since it
+   won't work). Intended for use as part of a `post-select` implementation for Cards and Dashboards."
   [object]
   (if (and (:public_uuid object)
            (not (enable-public-sharing)))
@@ -128,7 +140,8 @@
 
 
 (defn public-settings
-  "Return a simple map of key/value pairs which represent the public settings (`MetabaseBootstrap`) for the front-end application."
+  "Return a simple map of key/value pairs which represent the public settings (`MetabaseBootstrap`) for the front-end
+   application."
   []
   {:admin_email           (admin-email)
    :anon_tracking_enabled (anon-tracking-enabled)
@@ -137,13 +150,18 @@
    :embedding             (enable-embedding)
    :enable_query_caching  (enable-query-caching)
    :enable_nested_queries (enable-nested-queries)
+   :enable_xrays          (setting/get :enable-xrays)
    :engines               ((resolve 'metabase.driver/available-drivers))
    :ga_code               "UA-60817802-1"
    :google_auth_client_id (setting/get :google-auth-client-id)
    :has_sample_dataset    (db/exists? 'Database, :is_sample true)
+   :hide_embed_branding   (metastore/hide-embed-branding?)
    :ldap_configured       ((resolve 'metabase.integrations.ldap/ldap-configured?))
+   :available_locales     (available-locales-with-names)
    :map_tile_server_url   (map-tile-server-url)
+   :metastore_url         metastore/store-url
    :password_complexity   password/active-password-complexity
+   :premium_token         (metastore/premium-embedding-token)
    :public_sharing        (enable-public-sharing)
    :report_timezone       (setting/get :report-timezone)
    :setup_token           ((resolve 'metabase.setup/token-value))
@@ -152,4 +170,5 @@
    :timezone_short        (short-timezone-name (setting/get :report-timezone))
    :timezones             common/timezones
    :types                 (types/types->parents)
-   :version               config/mb-version-info})
+   :version               config/mb-version-info
+   :xray_max_cost         (setting/get :xray-max-cost)})

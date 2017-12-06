@@ -12,6 +12,7 @@ import {
 } from "./components/widgets/PublicLinksListing.jsx";
 import SecretKeyWidget from "./components/widgets/SecretKeyWidget.jsx";
 import EmbeddingLegalese from "./components/widgets/EmbeddingLegalese";
+import EmbeddingLevel from "./components/widgets/EmbeddingLevel";
 import LdapGroupMappingsWidget from "./components/widgets/LdapGroupMappingsWidget";
 
 import { UtilApi } from "metabase/services";
@@ -50,6 +51,14 @@ const SECTIONS = [
                 placeholder: "Select a timezone",
                 note: "Not all databases support timezones, in which case this setting won't take effect.",
                 allowValueCollection: true
+            },
+            {
+                key: "site-locale",
+                display_name: "Language",
+                type: "select",
+                options:  (MetabaseSettings.get("available_locales") || []).map(([value, name]) => ({ name, value })),
+                placeholder: "Select a language",
+                getHidden: () => MetabaseSettings.get("available_locales").length < 2
             },
             {
                 key: "anon-tracking-enabled",
@@ -302,17 +311,21 @@ const SECTIONS = [
                 description: null,
                 widget: EmbeddingLegalese,
                 getHidden: (settings) => settings["enable-embedding"],
-                onChanged: async (oldValue, newValue, settingsValues, onChange) => {
+                onChanged: async (oldValue, newValue, settingsValues, onChangeSetting) => {
+                    // Generate a secret key if none already exists
                     if (!oldValue && newValue && !settingsValues["embedding-secret-key"]) {
                         let result = await UtilApi.random_token();
-                        await onChange("embedding-secret-key", result.token);
+                        await onChangeSetting("embedding-secret-key", result.token);
                     }
                 }
-            },
-            {
+            }, {
                 key: "enable-embedding",
                 display_name: "Enable Embedding Metabase in other Applications",
                 type: "boolean",
+                getHidden: (settings) => !settings["enable-embedding"]
+            },
+            {
+                widget: EmbeddingLevel,
                 getHidden: (settings) => !settings["enable-embedding"]
             },
             {
@@ -365,7 +378,36 @@ const SECTIONS = [
                 allowValueCollection: true
             }
         ]
+    },
+    {
+        name: "X-Rays",
+        settings: [
+            {
+                key: "enable-xrays",
+                display_name: "Enable X-Rays",
+                type: "boolean",
+                allowValueCollection: true
+            },
+            {
+                key: "xray-max-cost",
+                type: "string",
+                allowValueCollection: true
+
+            }
+        ]
+    },
+    /*
+    {
+        name: "Premium Embedding",
+        settings: [
+            {
+                key: "premium-embedding-token",
+                display_name: "Premium Embedding Token",
+                widget: PremiumEmbeddingWidget
+            }
+        ]
     }
+    */
 ];
 for (const section of SECTIONS) {
     section.slug = slugify(section.name);

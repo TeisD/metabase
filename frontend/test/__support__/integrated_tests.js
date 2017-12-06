@@ -10,7 +10,7 @@ import "./mocks";
 
 import { format as urlFormat } from "url";
 import api from "metabase/lib/api";
-import { CardApi, SessionApi } from "metabase/services";
+import { CardApi, DashboardApi, SessionApi } from "metabase/services";
 import { METABASE_SESSION_COOKIE } from "metabase/lib/cookies";
 import normalReducers from 'metabase/reducers-main';
 import publicReducers from 'metabase/reducers-public';
@@ -43,23 +43,50 @@ let simulateOfflineMode = false;
 let apiRequestCompletedCallback = null;
 let skippedApiRequests = [];
 
-/**
- * Login to the Metabase test instance with default credentials
- */
-export async function login({ username = "bob@metabase.com", password = "12341234" } = {}) {
-    if (hasStartedCreatingStore) {
+
+// These i18n settings are same is beginning of app.js
+
+// make the i18n function "t" global so we don't have to import it in basically every file
+import { t, jt } from "c-3po";
+global.t = t;
+global.jt = jt;
+
+// set the locale before loading anything else
+import { setLocalization } from "metabase/lib/i18n";
+if (window.MetabaseLocalization) {
+    setLocalization(window.MetabaseLocalization)
+}
+
+const warnAboutCreatingStoreBeforeLogin = () => {
+    if (!loginSession && hasStartedCreatingStore) {
         console.warn(
-            "Warning: You have created a test store before calling login() which means that up-to-date site settings " +
+            "Warning: You have created a test store before calling logging in which means that up-to-date site settings " +
             "won't be in the store unless you call `refreshSiteSettings` action manually. Please prefer " +
             "logging in before all tests and creating the store inside an individual test or describe block."
         )
     }
+}
+/**
+ * Login to the Metabase test instance with default credentials
+ */
+export async function login({ username = "bob@metabase.com", password = "12341234" } = {}) {
+    warnAboutCreatingStoreBeforeLogin()
+    loginSession = await SessionApi.create({ username, password });
+}
 
-    if (isTestFixtureDatabase() && process.env.TEST_FIXTURE_SHARED_LOGIN_SESSION_ID) {
-        loginSession = { id: process.env.TEST_FIXTURE_SHARED_LOGIN_SESSION_ID }
-    } else {
-        loginSession = await SessionApi.create({ username, password });
-    }
+export function useSharedAdminLogin() {
+    warnAboutCreatingStoreBeforeLogin()
+    loginSession = { id: process.env.TEST_FIXTURE_SHARED_ADMIN_LOGIN_SESSION_ID }
+}
+export function useSharedNormalLogin() {
+    warnAboutCreatingStoreBeforeLogin()
+    loginSession = { id: process.env.TEST_FIXTURE_SHARED_NORMAL_LOGIN_SESSION_ID }
+}
+export const forBothAdminsAndNormalUsers = async (tests) => {
+    useSharedAdminLogin()
+    await tests()
+    useSharedNormalLogin()
+    await tests()
 }
 
 export function logout() {
@@ -326,6 +353,11 @@ export const createSavedQuestion = async (unsavedQuestion) => {
     return savedQuestion
 }
 
+export const createDashboard = async (details) => {
+    let savedDashboard = await DashboardApi.create(details)
+    return savedDashboard
+}
+
 /**
  * Waits for a API request with a given method (GET/POST/PUT...) and a url which matches the given regural expression.
  * Useful in those relatively rare situations where React components do API requests inline instead of using Redux actions.
@@ -351,6 +383,37 @@ export const waitForRequestToComplete = (method, urlRegex, { timeout = 5000 } = 
             }
         }
     })
+}
+
+/**
+ * Lets you replace given API endpoints with mocked implementations for the lifetime of a test
+ */
+export async function withApiMocks(mocks, test) {
+    if (!mocks.every(([apiService, endpointName, mockMethod]) =>
+            _.isObject(apiService) && _.isString(endpointName) && _.isFunction(mockMethod)
+        )
+    ) {
+        throw new Error(
+            "Seems that you are calling \`withApiMocks\` with invalid parameters. " +
+            "The calls should be in format \`withApiMocks([[ApiService, endpointName, mockMethod], ...], tests)\`."
+        )
+    }
+
+    const originals = mocks.map(([apiService, endpointName]) => apiService[endpointName])
+
+    // Replace real API endpoints with mocks
+    mocks.forEach(([apiService, endpointName, mockMethod]) => {
+        apiService[endpointName] = mockMethod
+    })
+
+    try {
+        await test();
+    } finally {
+        // Restore original endpoints after tests, even in case of an exception
+        mocks.forEach(([apiService, endpointName], index) => {
+            apiService[endpointName] = originals[index]
+        })
+    }
 }
 
 // Patches the metabase/lib/api module so that all API queries contain the login credential cookie.

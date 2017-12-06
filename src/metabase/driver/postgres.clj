@@ -26,6 +26,7 @@
    :bytea         :type/*    ; byte array
    :cidr          :type/Text ; IPv4/IPv6 network address
    :circle        :type/*
+   :citext        :type/Text ; case-insensitive text
    :date          :type/Date
    :decimal       :type/Decimal
    :float4        :type/Float
@@ -83,13 +84,13 @@
     :inet :type/IPAddress
     nil))
 
-(def ^:const ssl-params
+(def ^:private ^:const ssl-params
   "Params to include in the JDBC connection spec for an SSL connection."
   {:ssl        true
    :sslmode    "require"
    :sslfactory "org.postgresql.ssl.NonValidatingFactory"})  ; HACK Why enable SSL if we disable certificate validation?
 
-(def ^:const disable-ssl-params
+(def ^:private ^:const disable-ssl-params
   "Params to include in the JDBC connection spec to disable SSL."
   {:sslmode "disable"})
 

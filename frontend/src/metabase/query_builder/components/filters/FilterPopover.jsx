@@ -4,7 +4,7 @@ import React, { Component } from "react";
 
 import FieldList from "../FieldList.jsx";
 import OperatorSelector from "./OperatorSelector.jsx";
-
+import { t } from 'c-3po';
 import DatePicker from "./pickers/DatePicker.jsx";
 import NumberPicker from "./pickers/NumberPicker.jsx";
 import SelectPicker from "./pickers/SelectPicker.jsx";
@@ -23,6 +23,7 @@ import type { Filter, FieldFilter, ConcreteField } from "metabase/meta/types/Que
 import type { FieldMetadata, Operator } from "metabase/meta/types/Metadata";
 
 type Props = {
+    maxHeight?: number,
     query: StructuredQuery,
     filter?: Filter,
     onCommitFilter: (filter: Filter) => void,
@@ -227,7 +228,7 @@ export default class FilterPopover extends Component {
                     />
                 );
             }
-            return <span>not implemented {operatorField.type} {operator.multi ? "true" : "false"}</span>;
+            return <span>{t`not implemented ${operatorField.type}`} {operator.multi ? t`true` : t`false`}</span>;
         });
     }
 
@@ -240,13 +241,14 @@ export default class FilterPopover extends Component {
     render() {
         const { query } = this.props;
         const { filter } = this.state;
-        const [operator, field] = filter;
-        if (operator === "SEGMENT" || field == undefined) {
+        const [operator, fieldRef] = filter;
+        if (operator === "SEGMENT" || fieldRef == undefined) {
             return (
                 <div className="FilterPopover">
                     <FieldList
                         className="text-purple"
-                        field={field}
+                        maxHeight={this.props.maxHeight}
+                        field={fieldRef}
                         fieldOptions={query.filterFieldOptions(filter)}
                         segmentOptions={query.filterSegmentOptions(filter)}
                         tableMetadata={query.table()}
@@ -256,11 +258,13 @@ export default class FilterPopover extends Component {
                 </div>
             );
         } else {
-            let { table, field } = Query.getFieldTarget(filter[1], query.table());
-
+            let { table, field } = Query.getFieldTarget(fieldRef, query.table());
+            const dimension = query.parseFieldReference(fieldRef);
             return (
                 <div style={{
-                    minWidth: 300
+                    minWidth: 300,
+                    // $FlowFixMe
+                    maxWidth: dimension.field().isDate() ? null : 500
                 }}>
                     <div className="FilterPopover-header text-grey-3 p1 mt1 flex align-center">
                         <a className="cursor-pointer text-purple-hover transition-color flex align-center" onClick={this.clearField}>
@@ -292,7 +296,7 @@ export default class FilterPopover extends Component {
                             className={cx("Button Button--purple full", { "disabled": !this.isValid() })}
                             onClick={() => this.commitFilter(this.state.filter)}
                         >
-                            {!this.props.filter ? "Add filter" : "Update filter"}
+                            {!this.props.filter ? t`Add filter` : t`Update filter`}
                         </button>
                     </div>
                 </div>

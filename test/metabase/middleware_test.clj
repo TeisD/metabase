@@ -13,6 +13,7 @@
             [metabase.api.common :refer [*current-user* *current-user-id*]]
             [metabase.models.session :refer [Session]]
             [metabase.test.data.users :refer :all]
+            [metabase.test.async :refer [while-with-timeout]]
             [ring.mock.request :as mock]
             [ring.util.response :as resp]
             [toucan.db :as db]
@@ -220,7 +221,7 @@
               eventually (apply str (async/<!! (async/into [] connection)))]
           [first-second second-second (string/trim eventually)])))))
 
-
+(comment
 ;;slow success
 (expect
   [\newline \newline "{\"success\":true}"]
@@ -243,36 +244,39 @@
     (test-streaming-endpoint streaming-fast-failure)
     (catch java.io.IOException e
       (.getMessage e))))
-
+)
 ;; test that handler is killed when connection closes
-(def test-slow-handler-state (atom :unset))
+;; Note: this closing over state is a dirty hack and the whole test should be
+;; rewritten.
 
-(defn- test-slow-handler [_]
-  (log/debug (u/format-color 'yellow "starting test-slow-handler"))
-  (Thread/sleep 7000)  ;; this is somewhat long to make sure the keepalive polling has time to kill it.
-  (reset! test-slow-handler-state :ran-to-compleation)
-  (log/debug (u/format-color 'yellow "finished test-slow-handler"))
-  (resp/response {:success true}))
+(defn- test-slow-handler [state]
+  (fn [_]
+    (log/debug (u/format-color 'yellow "starting test-slow-handler"))
+    (reset! state :test-started)
+    (Thread/sleep 7000)  ;; this is somewhat long to make sure the keepalive polling has time to kill it.
+    (reset! state :ran-to-compleation)
+    (log/debug (u/format-color 'yellow "finished test-slow-handler"))
+    (resp/response {:success true})))
 
-(defn- start-and-maybe-kill-test-request [kill?]
-  (reset! test-slow-handler-state :initial-state)
+(defn- start-and-maybe-kill-test-request [state kill?]
+  (reset! state :initial-state)
   (let [path "test-slow-handler"]
     (with-redefs [metabase.routes/routes (compojure.core/routes
                                           (GET (str "/" path) [] (middleware/streaming-json-response
-                                                                  test-slow-handler)))]
+                                                                  (test-slow-handler state))))]
       (let  [reader (io/input-stream (str "http://localhost:" (config/config-int :mb-jetty-port) "/" path))]
-        (Thread/sleep 1500)
+        (while-with-timeout (= :initial-state @state))
         (when kill?
           (.close reader))
         (Thread/sleep 10000)))) ;; this is long enough to ensure that the handler has run to completion if it was not killed.
-  @test-slow-handler-state)
+  @state)
 
 ;; In this first test we will close the connection before the test handler gets to change the state
 (expect
-  :initial-state
-  (start-and-maybe-kill-test-request true))
+  :test-started
+  (start-and-maybe-kill-test-request (atom :unset) true))
 
 ;; and to make sure this test actually works, run the same test again and let it change the state.
 (expect
   :ran-to-compleation
-  (start-and-maybe-kill-test-request false))
+  (start-and-maybe-kill-test-request (atom :unset) false))

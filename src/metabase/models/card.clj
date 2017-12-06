@@ -1,4 +1,6 @@
 (ns metabase.models.card
+  "Underlying DB model for what is now most commonly referred to as a 'Question' in most user-facing situations. Card
+  is a historical name, but is the same thing; both terms are used interchangeably in the backend codebase."
   (:require [clojure.core.memoize :as memoize]
             [clojure.set :as set]
             [clojure.tools.logging :as log]
@@ -141,27 +143,31 @@
 
 ;;; -------------------------------------------------- Lifecycle --------------------------------------------------
 
+(defn- native-query? [query-type]
+  (or (= query-type "native")
+      (= query-type :native)))
 
-
-(defn- query->database-and-table-ids
+(defn query->database-and-table-ids
   "Return a map with `:database-id` and source `:table-id` that should be saved for a Card. Handles queries that use
    other queries as their source (ones that come in with a `:source-table` like `card__100`) recursively, as well as
    normal queries."
   [outer-query]
   (let [database-id  (qputil/get-normalized outer-query :database)
+        query-type   (qputil/get-normalized outer-query :type)
         source-table (qputil/get-in-normalized outer-query [:query :source-table])]
     (cond
-      (integer? source-table) {:database-id database-id, :table-id source-table}
-      (string? source-table)  (let [[_ card-id] (re-find #"^card__(\d+)$" source-table)]
-                                (db/select-one [Card [:table_id :table-id] [:database_id :database-id]]
-                                  :id (Integer/parseInt card-id))))))
+      (native-query? query-type) {:database-id database-id, :table-id nil}
+      (integer? source-table)    {:database-id database-id, :table-id source-table}
+      (string? source-table)     (let [[_ card-id] (re-find #"^card__(\d+)$" source-table)]
+                                   (db/select-one [Card [:table_id :table-id] [:database_id :database-id]]
+                                     :id (Integer/parseInt card-id))))))
 
 (defn- populate-query-fields [{{query-type :type, :as outer-query} :dataset_query, :as card}]
-  (merge (when query-type
-           (let [{:keys [database-id table-id]} (query->database-and-table-ids outer-query)]
-             {:database_id database-id
-              :table_id    table-id
-              :query_type  (keyword query-type)}))
+  (merge (when-let [{:keys [database-id table-id]} (and query-type
+                                                        (query->database-and-table-ids outer-query))]
+           {:database_id database-id
+            :table_id    table-id
+            :query_type  (keyword query-type)})
          card))
 
 (defn- pre-insert [{:keys [dataset_query], :as card}]

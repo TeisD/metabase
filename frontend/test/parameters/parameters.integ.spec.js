@@ -1,6 +1,6 @@
 // Converted from an old Selenium E2E test
 import {
-    login,
+    useSharedAdminLogin,
     logout,
     createTestStore,
     restorePreviousLogin,
@@ -60,12 +60,12 @@ const getRelativeUrlWithoutHash = (url) =>
     url.replace(/#.*$/, "").replace(/http:\/\/.*?\//, "/")
 
 const COUNT_ALL = "200";
-const COUNT_DOOHICKEY = "56";
-const COUNT_GADGET = "43";
+const COUNT_DOOHICKEY = "51";
+const COUNT_GADGET = "47";
 
 describe("parameters", () => {
     beforeAll(async () =>
-        await login()
+        useSharedAdminLogin()
     );
 
     describe("questions", () => {
