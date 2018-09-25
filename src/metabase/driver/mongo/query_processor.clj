@@ -371,7 +371,7 @@
     (let [join-projections (map #(vector (:field-display-name %) (str "$" (:table-name %) "." (:field-name %))) (filter #(some? (:fk-field-id %)) fields))]
       (let [new-projections (doall (map #(vector (->lvalue %) (->rvalue %)) fields))]
         (let [new-projections (concat new-projections join-projections)]
-          (println new-projections)
+          ; (println new-projections)
           (-> pipeline-ctx
             (assoc :projections (map (comp keyword first) new-projections))
             ;; add project _id = false to keep _id from getting automatically returned unless explicitly specified
@@ -392,6 +392,13 @@
     pipeline-ctx
     (update pipeline-ctx :query conj {$limit limit})))
 
+
+;;; ### debug println
+(defn- handle-println [{:keys [query]} pipeline-ctx]
+  (println "print")
+  (println :query pipeline-ctx)
+  pipeline-ctx
+)
 
 ;;; ### page
 
@@ -417,6 +424,7 @@
            handle-order-by
            handle-fields
            handle-limit
+           handle-println
            handle-page]))
 
 (defn- create-unescaping-rename-map [original-keys]
