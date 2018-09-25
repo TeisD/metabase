@@ -16,7 +16,7 @@
 ;;; --------------------------------------------------- Constants ---------------------------------------------------
 
 ;; TODO - should this be renamed `saved-cards-virtual-id`?
-(def ^:const ^Integer virtual-id
+(def ^Integer virtual-id
   "The ID used to signify that a database is 'virtual' rather than physical.
 
    A fake integer ID is used so as to minimize the number of changes that need to be made on the frontend -- by using
@@ -110,6 +110,7 @@
   (merge models/IModelDefaults
          {:hydration-keys (constantly [:database :db])
           :types          (constantly {:details                     :encrypted-json
+                                       :options                     :json
                                        :engine                      :keyword
                                        :metadata_sync_schedule      :cron-string
                                        :cache_field_values_schedule :cron-string})
@@ -160,6 +161,8 @@
   "The string to replace passwords with when serializing Databases."
   "**MetabasePass**")
 
+;; when encoding a Database as JSON remove the `details` for any non-admin User. For admin users they can still see
+;; the `details` but remove the password. No one gets to see this in an API response!
 (add-encoder
  DatabaseInstance
  (fn [db json-generator]

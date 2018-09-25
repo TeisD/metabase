@@ -5,8 +5,10 @@
              [config :as config]
              [util :as u]]
             [metabase.models.database :refer [Database]]
+            [ring.util.codec :as codec]
             [toucan.db :as db])
-  (:import [com.google.api.client.googleapis.auth.oauth2 GoogleAuthorizationCodeFlow GoogleAuthorizationCodeFlow$Builder GoogleCredential GoogleCredential$Builder GoogleTokenResponse]
+  (:import [com.google.api.client.googleapis.auth.oauth2 GoogleAuthorizationCodeFlow
+            GoogleAuthorizationCodeFlow$Builder GoogleCredential GoogleCredential$Builder GoogleTokenResponse]
            com.google.api.client.googleapis.javanet.GoogleNetHttpTransport
            [com.google.api.client.googleapis.json GoogleJsonError GoogleJsonResponseException]
            com.google.api.client.googleapis.services.AbstractGoogleClientRequest
@@ -25,8 +27,8 @@
 (def ^:private ^:const ^String redirect-uri "urn:ietf:wg:oauth:2.0:oob")
 
 (defn execute-no-auto-retry
-  "`execute` REQUEST, and catch any `GoogleJsonResponseException` is
-  throws, converting them to `ExceptionInfo` and rethrowing them."
+  "`execute` REQUEST, and catch any `GoogleJsonResponseException` is throws, converting them to `ExceptionInfo` and
+  rethrowing them."
   [^AbstractGoogleClientRequest request]
   (try (.execute request)
        (catch GoogleJsonResponseException e
@@ -36,18 +38,26 @@
                            (into {} error)))))))
 
 (defn execute
-  "`execute` REQUEST, and catch any `GoogleJsonResponseException` is
-  throws, converting them to `ExceptionInfo` and rethrowing them.
+  "`execute` REQUEST, and catch any `GoogleJsonResponseException` is throws, converting them to `ExceptionInfo` and
+  rethrowing them.
 
   This automatically retries any failed requests up to 2 times."
   [^AbstractGoogleClientRequest request]
   (u/auto-retry 2
     (execute-no-auto-retry request)))
 
+(defn- create-application-name
+  "Creates the application name string, separated out from the `def` below so it's testable with different values"
+  [{:keys [tag ^String hash branch]}]
+  (let [encoded-hash (some-> hash (.getBytes "UTF-8") codec/base64-encode)]
+    (format "Metabase/%s (GPN:Metabse; %s %s)"
+            (or tag "?")
+            (or encoded-hash "?")
+            (or branch "?"))))
+
 (def ^:const ^String application-name
   "The application name we should use for Google drivers. Requested by Google themselves -- see #2627"
-  (let [{:keys [tag hash branch]} config/mb-version-info]
-    (format "Metabase/%s (GPN:Metabse; %s %s)" tag hash branch)))
+  (create-application-name config/mb-version-info))
 
 
 (defn- fetch-access-and-refresh-tokens* [scopes, ^String client-id, ^String client-secret, ^String auth-code]
@@ -61,10 +71,10 @@
     {:access-token (.getAccessToken response), :refresh-token (.getRefreshToken response)}))
 
 (def ^{:arglists '([scopes client-id client-secret auth-code])} fetch-access-and-refresh-tokens
-  "Fetch Google access and refresh tokens.
-   This function is memoized because you're only allowed to redeem an auth-code once.
-   This way we can redeem it the first time when `can-connect?` checks to see if the DB details are viable;
-   then the second time we go to redeem it we can save the access token and refresh token with the newly created `Database` <3"
+  "Fetch Google access and refresh tokens. This function is memoized because you're only allowed to redeem an
+  auth-code once. This way we can redeem it the first time when `can-connect?` checks to see if the DB details are
+  viable; then the second time we go to redeem it we can save the access token and refresh token with the newly
+  created `Database` <3"
   (memoize fetch-access-and-refresh-tokens*))
 
 

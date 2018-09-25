@@ -5,12 +5,13 @@
              [config :as config]
              [http-client :as http]
              [util :as u]]
+            [metabase.api.common :as api]
             [metabase.core.initialization-status :as init-status]
-            [metabase.models.user :refer [User]]
+            [metabase.models.user :as user :refer [User]]
             [toucan.db :as db])
   (:import clojure.lang.ExceptionInfo))
 
-;;; ------------------------------------------------------------ User Definitions ------------------------------------------------------------
+;;; ------------------------------------------------ User Definitions ------------------------------------------------
 
 ;; ## Test Users
 ;;
@@ -44,7 +45,7 @@
 (def ^:private ^:const usernames
   (set (keys user->info)))
 
-;;; ------------------------------------------------------------ Test User Fns ------------------------------------------------------------
+;;; ------------------------------------------------- Test User Fns --------------------------------------------------
 
 (defn- wait-for-initiailization
   "Wait up to MAX-WAIT-SECONDS (default: 30) for Metabase to finish initializing.
@@ -58,7 +59,8 @@
      (when-not (init-status/complete?)
        (when (<= max-wait-seconds 0)
          (throw (Exception. "Metabase still hasn't finished initializing.")))
-       (printf "Metabase is not yet initialized, waiting 1 second (max wait remaining: %d seconds)...\n" max-wait-seconds)
+       (println (format "Metabase is not yet initialized, waiting 1 second (max wait remaining: %d seconds)...\n"
+                        max-wait-seconds))
        (Thread/sleep 1000)
        (recur (dec max-wait-seconds))))))
 
@@ -130,7 +132,8 @@
   (or (@tokens username)
       (u/prog1 (http/authenticate (user->credentials username))
         (swap! tokens assoc username <>))
-      (throw (Exception. (format "Authentication failed for %s with credentials %s" username (user->credentials username))))))
+      (throw (Exception. (format "Authentication failed for %s with credentials %s"
+                                 username (user->credentials username))))))
 
 (defn- client-fn [username & args]
   (try
@@ -155,6 +158,23 @@
 
 (defn ^:deprecated delete-temp-users!
   "Delete all users besides the 4 persistent test users.
-   This is a HACK to work around tests that don't properly clean up after themselves; one day we should be able to remove this. (TODO)"
+  This is a HACK to work around tests that don't properly clean up after themselves; one day we should be able to
+  remove this. (TODO)"
   []
   (db/delete! User :id [:not-in (map user->id [:crowberto :lucky :rasta :trashbird])]))
+
+(defn do-with-test-user
+  "Call `f` with various `metabase.api.common` dynamic vars bound to the test User named by `user-kwd`."
+  [user-kwd f]
+  (binding [api/*current-user*                 (delay (User (user->id user-kwd)))
+            api/*current-user-id*              (user->id user-kwd)
+            api/*is-superuser?*                (db/select-one-field :is_superuser User :id (user->id user-kwd))
+            api/*current-user-permissions-set* (delay (user/permissions-set (user->id user-kwd)))]
+    (f)))
+
+(defmacro with-test-user
+  "Call `body` with various `metabase.api.common` dynamic vars like `*current-user*` bound to the test User named by
+  `user-kwd`."
+  {:style/indent 1}
+  [user-kwd & body]
+  `(do-with-test-user ~user-kwd (fn [] ~@body)))

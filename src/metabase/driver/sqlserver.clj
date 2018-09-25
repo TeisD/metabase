@@ -6,9 +6,17 @@
              [driver :as driver]
              [util :as u]]
             [metabase.driver.generic-sql :as sql]
+            [metabase.driver.generic-sql.query-processor :as sqlqp]
             [metabase.util
              [honeysql-extensions :as hx]
-             [ssh :as ssh]]))
+             [i18n :refer [tru]]
+             [ssh :as ssh]])
+  (:import java.sql.Time))
+
+(defrecord SQLServerDriver []
+  :load-ns true
+  clojure.lang.Named
+  (getName [_] "SQL Server"))
 
 (defn- column->base-type
   "Mappings for SQLServer types to Metabase types.
@@ -56,7 +64,7 @@
   "Build the connection spec for a SQL Server database from the DETAILS set in the admin panel.
    Check out the full list of options here: `https://technet.microsoft.com/en-us/library/ms378988(v=sql.105).aspx`"
   [{:keys [user password db host port instance domain ssl]
-    :or   {user "dbuser", password "dbpassword", db "", host "localhost", port 1433}
+    :or   {user "dbuser", password "dbpassword", db "", host "localhost"}
     :as   details}]
   (-> {:applicationName config/mb-app-id-string
        :classname       "com.microsoft.sqlserver.jdbc.SQLServerDriver"
@@ -68,7 +76,6 @@
        ;; instead of part of the `:subname` is preferable because they support things like passwords with special
        ;; characters)
        :database        db
-       :port            port
        :password        password
        ;; Wait up to 10 seconds for connection success. If we get no response by then, consider the connection failed
        :loginTimeout    10
@@ -79,6 +86,9 @@
                              user)
        :instanceName    instance
        :encrypt         (boolean ssl)}
+      ;; only include `port` if it is specified; leave out for dynamic port: see
+      ;; https://github.com/metabase/metabase/issues/7597
+      (merge (when port {:port port}))
       (sql/handle-additional-options details, :seperator-style :semicolon)))
 
 
@@ -146,76 +156,63 @@
                                                  items))))
 
 ;; SQLServer doesn't support `TRUE`/`FALSE`; it uses `1`/`0`, respectively; convert these booleans to numbers.
-(defn- prepare-value [{value :value}]
-  (cond
-    (true? value)  1
-    (false? value) 0
-    :else          value))
+(defmethod sqlqp/->honeysql [SQLServerDriver Boolean]
+  [_ bool]
+  (if bool 1 0))
+
+(defmethod sqlqp/->honeysql [SQLServerDriver Time]
+  [_ time-value]
+  (hx/->time time-value))
 
 (defn- string-length-fn [field-key]
   (hsql/call :len (hx/cast :VARCHAR field-key)))
 
 
-(defrecord SQLServerDriver []
-  clojure.lang.Named
-  (getName [_] "SQL Server"))
-
-(def ^:private sqlserver-date-formatter (driver/create-db-time-formatter "yyyy-MM-dd'T'HH:mm:ss.SSSSSSSSZ"))
+(def ^:private sqlserver-date-formatters (driver/create-db-time-formatters "yyyy-MM-dd'T'HH:mm:ss.SSSSSSSSZ"))
 (def ^:private sqlserver-db-time-query "select CONVERT(nvarchar(30), SYSDATETIMEOFFSET(), 127)")
 
 (u/strict-extend SQLServerDriver
   driver/IDriver
-  (merge (sql/IDriverSQLDefaultsMixin)
-         {:date-interval  (u/drop-first-arg date-interval)
-          :details-fields (constantly (ssh/with-tunnel-config
-                                        [{:name         "host"
-                                          :display-name "Host"
-                                          :default      "localhost"}
-                                         {:name         "port"
-                                          :display-name "Port"
-                                          :type         :integer
-                                          :default      1433}
-                                         {:name         "db"
-                                          :display-name "Database name"
-                                          :placeholder  "BirdsOfTheWorld"
-                                          :required     true}
-                                         {:name         "instance"
-                                          :display-name "Database instance name"
-                                          :placeholder  "N/A"}
-                                         {:name         "domain"
-                                          :display-name "Windows domain"
-                                          :placeholder  "N/A"}
-                                         {:name         "user"
-                                          :display-name "Database username"
-                                          :placeholder  "What username do you use to login to the database?"
-                                          :required     true}
-                                         {:name         "password"
-                                          :display-name "Database password"
-                                          :type         :password
-                                          :placeholder  "*******"}
-                                         {:name         "ssl"
-                                          :display-name "Use a secure connection (SSL)?"
-                                          :type         :boolean
-                                          :default      false}
-                                         {:name         "additional-options"
-                                          :display-name "Additional JDBC connection string options"
-                                          :placeholder  "trustServerCertificate=false"}]))
-          :current-db-time (driver/make-current-db-time-fn sqlserver-date-formatter sqlserver-db-time-query)})
-
+  (merge
+   (sql/IDriverSQLDefaultsMixin)
+   {:date-interval  (u/drop-first-arg date-interval)
+    :details-fields (constantly (ssh/with-tunnel-config
+                                  [driver/default-host-details
+                                   (assoc driver/default-port-details :placeholder "1433")
+                                   (assoc driver/default-dbname-details
+                                     :name         "db"
+                                     :placeholder  (tru "BirdsOfTheWorld"))
+                                   {:name         "instance"
+                                    :display-name (tru "Database instance name")
+                                    :placeholder  (tru "N/A")}
+                                   {:name         "domain"
+                                    :display-name (tru "Windows domain")
+                                    :placeholder  (tru "N/A")}
+                                   driver/default-user-details
+                                   driver/default-password-details
+                                   driver/default-ssl-details
+                                   (assoc driver/default-additional-options-details
+                                     :placeholder  "trustServerCertificate=false")]))
+    :current-db-time (driver/make-current-db-time-fn sqlserver-db-time-query sqlserver-date-formatters)
+    :features        (fn [this]
+                       ;; SQLServer LIKE clauses are case-sensitive or not based on whether the collation of the
+                       ;; server and the columns themselves. Since this isn't something we can really change in the
+                       ;; query itself don't present the option to the users in the UI
+                       (conj (sql/features this) :no-case-sensitivity-string-filter-options))})
 
   sql/ISQLDriver
-  (merge (sql/ISQLDriverDefaultsMixin)
-         {:apply-limit               (u/drop-first-arg apply-limit)
-          :apply-page                (u/drop-first-arg apply-page)
-          :column->base-type         (u/drop-first-arg column->base-type)
-          :connection-details->spec  (u/drop-first-arg connection-details->spec)
-          :current-datetime-fn       (constantly :%getutcdate)
-          :date                      (u/drop-first-arg date)
-          :excluded-schemas          (constantly #{"sys" "INFORMATION_SCHEMA"})
-          :prepare-value             (u/drop-first-arg prepare-value)
-          :stddev-fn                 (constantly :stdev)
-          :string-length-fn          (u/drop-first-arg string-length-fn)
-          :unix-timestamp->timestamp (u/drop-first-arg unix-timestamp->timestamp)}))
+  (merge
+   (sql/ISQLDriverDefaultsMixin)
+   {:apply-limit               (u/drop-first-arg apply-limit)
+    :apply-page                (u/drop-first-arg apply-page)
+    :column->base-type         (u/drop-first-arg column->base-type)
+    :connection-details->spec  (u/drop-first-arg connection-details->spec)
+    :current-datetime-fn       (constantly :%getutcdate)
+    :date                      (u/drop-first-arg date)
+    :excluded-schemas          (constantly #{"sys" "INFORMATION_SCHEMA"})
+    :stddev-fn                 (constantly :stdev)
+    :string-length-fn          (u/drop-first-arg string-length-fn)
+    :unix-timestamp->timestamp (u/drop-first-arg unix-timestamp->timestamp)}))
 
 (defn -init-driver
   "Register the SQLServer driver"

@@ -2,7 +2,9 @@
   (:require [clojure.tools.logging :as log]
             [metabase.models.setting :as setting :refer [defsetting]]
             [metabase.util :as u]
-            [metabase.util.schema :as su]
+            [metabase.util
+             [i18n :refer [tru trs]]
+             [schema :as su]]
             [postal
              [core :as postal]
              [support :refer [make-props]]]
@@ -12,14 +14,14 @@
 ;;; CONFIG
 ;; TODO - smtp-port should be switched to type :integer
 
-(defsetting email-from-address  "Email address you want to use as the sender of Metabase." :default "notifications@metabase.com")
-(defsetting email-smtp-host     "The address of the SMTP server that handles your emails.")
-(defsetting email-smtp-username "SMTP username.")
-(defsetting email-smtp-password "SMTP password.")
-(defsetting email-smtp-port     "The port your SMTP server uses for outgoing emails.")
+(defsetting email-from-address  (tru "Email address you want to use as the sender of Metabase.") :default "notifications@metabase.com")
+(defsetting email-smtp-host     (tru "The address of the SMTP server that handles your emails."))
+(defsetting email-smtp-username (tru "SMTP username."))
+(defsetting email-smtp-password (tru "SMTP password."))
+(defsetting email-smtp-port     (tru "The port your SMTP server uses for outgoing emails."))
 (defsetting email-smtp-security
-  "SMTP secure connection protocol. (tls, ssl, starttls, or none)"
-  :default "none"
+  (tru "SMTP secure connection protocol. (tls, ssl, starttls, or none)")
+  :default (tru "none")
   :setter  (fn [new-value]
              (when-not (nil? new-value)
                (assert (contains? #{"tls" "ssl" "none" "starttls"} new-value)))
@@ -55,7 +57,7 @@
 (def ^:private EmailMessage
   (s/constrained
    {:subject      s/Str
-    :recipients   [(s/pred u/is-email?)]
+    :recipients   [(s/pred u/email?)]
     :message-type (s/enum :text :html :attachments)
     :message      (s/cond-pre s/Str [su/Map])} ; TODO - what should this be a sequence of?
    (fn [{:keys [message-type message]}]
@@ -71,7 +73,8 @@
   {:style/indent 0}
   [{:keys [subject recipients message-type message]} :- EmailMessage]
   (when-not (email-smtp-host)
-    (throw (Exception. "SMTP host is not set.")))
+    (let [^String msg (str (tru "SMTP host is not set."))]
+      (throw (Exception. msg))))
   ;; Now send the email
   (send-email! (smtp-settings)
     {:from    (email-from-address)
@@ -85,7 +88,7 @@
 
 (defn send-message!
   "Send an email to one or more RECIPIENTS.
-   RECIPIENTS is a sequence of email addresses; MESSAGE-TYPE must be either `:text` or `:html` or `:attachments`.
+  RECIPIENTS is a sequence of email addresses; MESSAGE-TYPE must be either `:text` or `:html` or `:attachments`.
 
      (email/send-message!
        :subject      \"[Metabase] Password Reset Request\"
@@ -93,15 +96,14 @@
        :message-type :text
        :message      \"How are you today?\")
 
-   Upon success, this returns the MESSAGE that was just sent. This function will catch and log any exception,
+  Upon success, this returns the MESSAGE that was just sent. This function will catch and log any exception,
   returning a map with a description of the error"
   {:style/indent 0}
   [& {:keys [subject recipients message-type message] :as msg-args}]
   (try
     (send-message-or-throw! msg-args)
     (catch Throwable e
-      (println "Failed to send email:" e)
-      (log/warn e "Failed to send email")
+      (log/warn e (trs "Failed to send email"))
       {:error   :ERROR
        :message (.getMessage e)})))
 
@@ -126,17 +128,16 @@
     {:error   :SUCCESS
      :message nil}
     (catch Throwable e
-      (log/error "Error testing SMTP connection:" (.getMessage e))
+      (log/error e (trs "Error testing SMTP connection"))
       {:error   :ERROR
        :message (.getMessage e)})))
 
 (def ^:private email-security-order ["tls" "starttls" "ssl"])
 
 (defn- guess-smtp-security
-  "Attempts to use each of the security methods in security order with the same set of credentials.
-   This is used only when the initial connection attempt fails, so it won't overwrite a functioning
-   configuration. If this uses something other than the provided method, a warning gets printed on
-   the config page"
+  "Attempts to use each of the security methods in security order with the same set of credentials. This is used only
+  when the initial connection attempt fails, so it won't overwrite a functioning configuration. If this uses something
+  other than the provided method, a warning gets printed on the config page"
   [details]
   (loop [[security-type & more-to-try] email-security-order] ;; make sure this is not lazy, or chunking
     (when security-type                                      ;; can cause some servers to block requests
